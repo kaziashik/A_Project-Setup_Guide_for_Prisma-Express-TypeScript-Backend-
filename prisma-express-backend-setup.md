@@ -47,9 +47,9 @@ Every other API resource (e.g. `post`, `comment`, `auth`) will get its own folde
 
 ---
 
-### Setting up the Project with Typescript, Express, Prisma And DB Connection
+## Setting up the Project with Typescript, Express, Prisma And DB Connection
 
-## Step 1: Initialize Git
+### Step 1: Initialize Git
 
 ```bash
 git init
