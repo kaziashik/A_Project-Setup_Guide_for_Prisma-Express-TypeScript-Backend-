@@ -18,8 +18,8 @@ Personal reference notes for scaffolding a Node.js backend with **TypeScript**, 
 - [8. Install All Project Dependencies](#8-install-all-project-dependencies)
 - [9. Set Up the Express App and Server](#9-set-up-the-express-app-and-server)
 - [10. Add NPM Scripts](#10-add-npm-scripts)
-- [11. Connect Prisma Client to the App](#11-connect-prisma-client-to-the-app)
-- [12. Configure Environment Variables](#12-configure-environment-variables)
+- [11. Configure Environment Variables](#12-configure-environment-variables)
+- [12. Connect Prisma Client to the App](#11-connect-prisma-client-to-the-app)
 - [13. Define Prisma Models](#13-define-prisma-models)
 - [14. Run Migrations and Generate the Client](#14-run-migrations-and-generate-the-client)
 - [15. Modular Folder Structure (Route / Controller / Service)](#15-modular-folder-structure-route--controller--service)
@@ -338,42 +338,9 @@ In `package.json`:
 
 ---
 
-## 11. Connect Prisma Client to the App
 
-Create `src/lib/prisma.ts`:
 
-```typescript
-import { PrismaPg } from "@prisma/adapter-pg";
-import "dotenv/config";
-import { PrismaClient } from "../../generated/prisma/client";
-
-const connectionString = `${process.env.DATABASE_URL}`;
-
-const adapter = new PrismaPg({ connectionString });
-const prisma = new PrismaClient({ adapter });
-
-export { prisma };
-```
-
-> ⚠️ **Expected error at this point:** the import from `../../generated/prisma/client` will fail because the Prisma Client hasn't been generated yet. That's normal — it's resolved once you:
-> 1. Write the Prisma schema models ([Section 13](#13-define-prisma-models))
-> 2. Run the migration ([Section 14](#14-run-migrations-and-generate-the-client))
-> 3. Run `npx prisma generate` to actually create the client at `generated/prisma`
-
-Once the client exists and migration has run, go back to `server.ts` and uncomment:
-
-```typescript
-await prisma.$connect();
-console.log("Connected to the database successfully.");
-// ...
-await prisma.$disconnect();
-```
-
-If the connection succeeds, you'll see the success log and the server will start on its port. If Prisma can't connect (e.g. no tables/database yet), it disconnects and the server won't boot — which is exactly why models + migration need to happen first.
-
----
-
-## 12. Configure Environment Variables
+## 11. Configure Environment Variables
 
 **`.env`:**
 
@@ -416,7 +383,64 @@ export default {
 - `path.join(process.cwd(), ".env")` builds an **absolute path** to `.env`, regardless of which file imports this config or how deeply nested it is
 - This avoids "works on my machine but not when run from another folder" bugs that plain `dotenv.config()` (which relies on the working directory matching where `.env` lives) can cause
 
+- **`dotenv.config({ path: ... })`** loads the variables from that `.env` file into `process.env`.
+
+This is more reliable than calling `dotenv.config()` with no path, because that default behavior depends on the current working directory matching where `.env` actually lives. Using `process.cwd()` explicitly avoids "it works on my machine but not when run from another folder" bugs.
+
 ---
+
+## Run the Server
+
+```bash
+npm run dev
+```
+
+This runs `tsx watch src/server.ts` (per the `dev` script), which starts the server with auto-restart on file changes. If `config/index.ts` loaded the `.env` correctly, you should see:
+
+```
+Server is running on port 5000
+```
+
+
+---
+
+
+
+## 12. Connect Prisma Client to the App
+
+Create `src/lib/prisma.ts`:
+
+```typescript
+import { PrismaPg } from "@prisma/adapter-pg";
+import "dotenv/config";
+import { PrismaClient } from "../../generated/prisma/client";
+
+const connectionString = `${process.env.DATABASE_URL}`;
+
+const adapter = new PrismaPg({ connectionString });
+const prisma = new PrismaClient({ adapter });
+
+export { prisma };
+```
+
+> ⚠️ **Expected error at this point:** the import from `../../generated/prisma/client` will fail because the Prisma Client hasn't been generated yet. That's normal — it's resolved once you:
+> 1. Write the Prisma schema models ([Section 13](#13-define-prisma-models))
+> 2. Run the migration ([Section 14](#14-run-migrations-and-generate-the-client))
+> 3. Run `npx prisma generate` to actually create the client at `generated/prisma`
+
+Once the client exists and migration has run, go back to `server.ts` and uncomment:
+
+```typescript
+await prisma.$connect();
+console.log("Connected to the database successfully.");
+// ...
+await prisma.$disconnect();
+```
+
+If the connection succeeds, you'll see the success log and the server will start on its port. If Prisma can't connect (e.g. no tables/database yet), it disconnects and the server won't boot — which is exactly why models + migration need to happen first.
+
+---
+
 
 ## 13. Define Prisma Models
 
