@@ -1,13 +1,584 @@
-# Prisma + Express + TypeScript Backend — Project Setup Guide
+# Express + TypeScript + Prisma — Backend Setup Notes
 
-A step-by-step note for setting up a backend project using **Express.js**, **TypeScript**, and **Prisma ORM** with **PostgreSQL**. Use this as a reference template whenever starting a new project with this stack.
+Personal reference notes for scaffolding a Node.js backend with **TypeScript**, **Express**, **Prisma ORM**, and **Prisma Postgres**.
+
+> ⚠️ **Security note:** never commit a real `DATABASE_URL` (or any secret) to GitHub. Keep actual values in a local `.env` (which is git-ignored) and commit only a `.env.example` with placeholder values.
 
 ---
 
-## 📁 Final Folder Structure
+## Table of Contents
+
+- [1. Overview](#1-overview)
+- [2. Initialize the Project](#2-initialize-the-project)
+- [3. Initialize TypeScript](#3-initialize-typescript)
+- [4. Install Prisma Core Packages](#4-install-prisma-core-packages)
+- [5. Configure ESM Support](#5-configure-esm-support)
+- [6. Initialize Prisma ORM](#6-initialize-prisma-orm)
+- [7. Create the Prisma Postgres Database](#7-create-the-prisma-postgres-database)
+- [8. Install All Project Dependencies](#8-install-all-project-dependencies)
+- [9. Set Up the Express App and Server](#9-set-up-the-express-app-and-server)
+- [10. Add NPM Scripts](#10-add-npm-scripts)
+- [11. Connect Prisma Client to the App](#11-connect-prisma-client-to-the-app)
+- [12. Configure Environment Variables](#12-configure-environment-variables)
+- [13. Define Prisma Models](#13-define-prisma-models)
+- [14. Run Migrations and Generate the Client](#14-run-migrations-and-generate-the-client)
+- [15. Modular Folder Structure (Route / Controller / Service)](#15-modular-folder-structure-route--controller--service)
+- [16. Final Project Structure](#16-final-project-structure)
+- [17. Overall Setup Flow Diagram](#17-overall-setup-flow-diagram)
+
+---
+
+## 1. Overview
+
+Stack covered in this note:
+
+| Tool | Purpose |
+|---|---|
+| **TypeScript** | Static typing for Node.js |
+| **Express** | HTTP server / routing |
+| **Prisma ORM** | Type-safe database client & migrations |
+| **Prisma Postgres** | Hosted Postgres database |
+| **tsx** | Fast TS execution + watch mode for dev |
+
+---
+
+## 2. Initialize the Project
+
+```bash
+npm init
+```
+
+Then initialize Git and add a `.gitignore`:
+
+```bash
+git init
+```
+
+Put all the standard ignore entries in `.gitignore` (at minimum):
 
 ```
-PROJECT-PRISMA-PRESS-BACKEND/
+node_modules
+dist
+.env
+generated
+```
+
+> Reference: Prisma Docs → **Getting Started → Prisma Postgres → Quickstart → Prisma ORM**.
+
+---
+
+## 3. Initialize TypeScript
+
+Install TypeScript and the dev runner, then generate `tsconfig.json`:
+
+```bash
+npm install typescript tsx @types/node --save-dev
+npx tsc --init
+```
+
+This creates `package.json`, `package-lock.json`, and `tsconfig.json`. Double-check these were generated correctly before moving on.
+
+---
+
+## 4. Install Prisma Core Packages
+
+```bash
+npm install prisma @types/node --save-dev
+npm install @prisma/client @prisma/adapter-pg dotenv
+```
+
+| Package | What it does |
+|---|---|
+| `prisma` | CLI for `prisma init`, `prisma migrate`, `prisma generate` |
+| `@prisma/client` | Prisma Client library for querying the database |
+| `@prisma/adapter-pg` | node-postgres driver adapter connecting Prisma Client to Postgres |
+| `dotenv` | Loads environment variables from `.env` |
+
+---
+
+## 5. Configure ESM Support
+
+**`package.json`** — make sure `"type"` is set to `"module"`:
+
+```json
+{
+  "type": "module"
+}
+```
+
+**`tsconfig.json`** — use an ESM-compatible config. Final version used for this project:
+
+```json
+{
+  "compilerOptions": {
+    "outDir": "./dist",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2023",
+    "types": ["node"],
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "noUncheckedIndexedAccess": true,
+    "strict": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true
+  },
+  // "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+This extends Prisma's recommended minimal bundler/ESM config with stricter project-wide options (`outDir`, `declaration`, `noUncheckedIndexedAccess`, etc.).
+
+---
+
+## 6. Initialize Prisma ORM
+
+```bash
+npx prisma init --output ../generated/prisma
+```
+
+This single command:
+
+- Creates a `prisma/` directory with a `schema.prisma` file (datasource + models go here)
+- Creates a `.env` file in the project root
+- Sets up the Prisma Client to generate into `generated/prisma/`
+- Creates a `prisma.config.ts` file
+
+**Generated `prisma.config.ts`:**
+
+```typescript
+import "dotenv/config";
+import { defineConfig, env } from "prisma/config";
+
+export default defineConfig({
+  schema: "prisma/schema.prisma",
+  migrations: {
+    path: "prisma/migrations",
+  },
+  datasource: {
+    url: env("DATABASE_URL"),
+  },
+});
+```
+
+**Generated `prisma/schema.prisma`:**
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+```
+
+> `prisma init` creates scaffolding with a placeholder `DATABASE_URL`. Replace it with a real connection string in the next step.
+
+---
+
+## 7. Create the Prisma Postgres Database
+
+**Option A — via CLI:**
+
+```bash
+npx create-db
+```
+
+**Option B — via the Prisma dashboard:**
+
+1. Go to the Prisma dashboard and create a new project
+2. Skip the "deploy" step for now
+3. Click **Open Connect Setup**
+4. Copy the connection string
+5. Paste it into `.env`:
+
+```bash
+DATABASE_URL="YOUR_CONNECTION_STRING_HERE"
+```
+
+✅ Prisma is now wired up. Next: install the rest of the app dependencies.
+
+---
+
+## 8. Install All Project Dependencies
+
+**Dependencies (all at once):**
+
+```bash
+npm install @prisma/adapter-pg @prisma/client bcryptjs cookie-parser cors dotenv express http-status jsonwebtoken pg
+```
+
+**Dev Dependencies (all at once):**
+
+```bash
+npm install -D @types/cookie-parser @types/cors @types/express @types/jsonwebtoken @types/node @types/pg prisma tsx typescript
+```
+
+> **Why separate `@types/*` packages?** On npm, a package tagged **`T`** ships its own TypeScript types. A package tagged **`DT`** does *not* — its types live in a separate `@types/<package>` package, which you install with `-D` (dev dependency).
+
+| Package | Type |
+|---|---|
+| `@prisma/adapter-pg` | dependency |
+| `@prisma/client` | dependency |
+| `bcryptjs` | dependency |
+| `cookie-parser` | dependency |
+| `cors` | dependency |
+| `dotenv` | dependency |
+| `express` | dependency |
+| `http-status` | dependency |
+| `jsonwebtoken` | dependency |
+| `pg` | dependency |
+| `@types/cookie-parser` | dev dependency |
+| `@types/cors` | dev dependency |
+| `@types/express` | dev dependency |
+| `@types/jsonwebtoken` | dev dependency |
+| `@types/node` | dev dependency |
+| `@types/pg` | dev dependency |
+| `prisma` | dev dependency |
+| `tsx` | dev dependency |
+| `typescript` | dev dependency |
+
+---
+
+## 9. Set Up the Express App and Server
+
+Create a `src/` directory with `app.ts` and `server.ts`.
+
+**`src/app.ts`:**
+
+```typescript
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import express, { Application, Request, Response } from "express";
+import config from "./config";
+import { userRoutes } from "./modules/user/user.route";
+
+const app: Application = express();
+
+app.use(
+  cors({
+    origin: config.app_url,
+    credentials: true,
+  })
+);
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// API
+app.get("/", (req: Request, res: Response) => {
+  res.send("Hello, World!");
+});
+
+app.use("/api/users", userRoutes);
+
+export default app;
+```
+
+**`src/server.ts`:**
+
+```typescript
+import "dotenv/config";
+import app from "./app";
+import config from "./config";
+import { prisma } from "./lib/prisma";
+
+const PORT = config.port;
+
+async function main() {
+  try {
+    // await prisma.$connect();
+    // console.log("Connected to the database successfully.");
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Error starting the server:", error);
+    // await prisma.$disconnect();
+    process.exit(1);
+  }
+}
+
+main();
+```
+
+> The `main()` function is async so it can connect to the database **before** the server starts. If the DB connection fails, the server never boots and the process exits cleanly instead of running with a broken connection.
+>
+> The `$connect` / `$disconnect` lines are commented out for now — there's no database/table to connect to yet (see [Section 14](#14-run-migrations-and-generate-the-client)).
+
+---
+
+## 10. Add NPM Scripts
+
+In `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  }
+}
+```
+
+| Script | Purpose |
+|---|---|
+| `dev` | Runs the server with `tsx watch` — auto-restarts on file changes |
+| `build` | Compiles TypeScript to JavaScript into `dist/` via `tsc` |
+| `start` | Runs the compiled JS — used in production |
+
+---
+
+## 11. Connect Prisma Client to the App
+
+Create `src/lib/prisma.ts`:
+
+```typescript
+import { PrismaPg } from "@prisma/adapter-pg";
+import "dotenv/config";
+import { PrismaClient } from "../../generated/prisma/client";
+
+const connectionString = `${process.env.DATABASE_URL}`;
+
+const adapter = new PrismaPg({ connectionString });
+const prisma = new PrismaClient({ adapter });
+
+export { prisma };
+```
+
+> ⚠️ **Expected error at this point:** the import from `../../generated/prisma/client` will fail because the Prisma Client hasn't been generated yet. That's normal — it's resolved once you:
+> 1. Write the Prisma schema models ([Section 13](#13-define-prisma-models))
+> 2. Run the migration ([Section 14](#14-run-migrations-and-generate-the-client))
+> 3. Run `npx prisma generate` to actually create the client at `generated/prisma`
+
+Once the client exists and migration has run, go back to `server.ts` and uncomment:
+
+```typescript
+await prisma.$connect();
+console.log("Connected to the database successfully.");
+// ...
+await prisma.$disconnect();
+```
+
+If the connection succeeds, you'll see the success log and the server will start on its port. If Prisma can't connect (e.g. no tables/database yet), it disconnects and the server won't boot — which is exactly why models + migration need to happen first.
+
+---
+
+## 12. Configure Environment Variables
+
+**`.env`:**
+
+```bash
+PORT=5000
+APP_URL=http://localhost:5000
+DATABASE_URL="postgres://<your-prisma-postgres-connection-string>"
+BCRYPT_SALT_ROUNDS=10
+JWT_ACCESS_SECRET='accesssecret'
+JWT_REFRESH_SECRET='refreshtoken'
+JWT_ACCESS_EXPIRES_IN='1d'
+JWT_REFRESH_EXPIRES_IN='7d'
+```
+
+> Replace `JWT_*` placeholder values with strong random secrets in real use — don't ship these example strings to production.
+
+**`src/config/index.ts`:**
+
+```typescript
+import dotenv from "dotenv";
+import path from "path";
+
+dotenv.config({ path: path.join(process.cwd(), ".env") });
+
+export default {
+  port: process.env.PORT,
+  database_url: process.env.DATABASE_URL,
+  app_url: process.env.APP_URL,
+  bcrypt_salt_rounds: process.env.BCRYPT_SALT_ROUNDS,
+  jwt_access_secret: process.env.JWT_ACCESS_SECRET,
+  jwt_refresh_secret: process.env.JWT_REFRESH_SECRET,
+  jwt_access_expires_in: process.env.JWT_ACCESS_EXPIRES_IN,
+  jwt_refresh_expires_in: process.env.JWT_REFRESH_EXPIRES_IN,
+};
+```
+
+**Why `path.join(process.cwd(), ".env")` instead of plain `dotenv.config()`?**
+
+- `process.cwd()` returns the directory you ran `npm run dev` from (normally the project root)
+- `path.join(process.cwd(), ".env")` builds an **absolute path** to `.env`, regardless of which file imports this config or how deeply nested it is
+- This avoids "works on my machine but not when run from another folder" bugs that plain `dotenv.config()` (which relies on the working directory matching where `.env` lives) can cause
+
+---
+
+## 13. Define Prisma Models
+
+### 13.1 Single-file schema (default)
+
+By default, everything lives in one file: `prisma/schema.prisma`.
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id    Int     @id @default(autoincrement())
+  email String  @unique
+  name  String?
+  posts Post[]
+}
+
+model Post {
+  id        Int     @id @default(autoincrement())
+  title     String
+  content   String?
+  published Boolean @default(false)
+  author    User    @relation(fields: [authorId], references: [id])
+  authorId  Int
+}
+```
+
+### 13.2 Multi-file schema (recommended for larger projects)
+
+Prisma supports splitting models across multiple `.prisma` files inside a folder:
+
+```
+prisma/
+├── migrations/
+└── schema/
+    ├── enums.prisma
+    ├── profile.prisma
+    ├── schema.prisma
+    └── user.prisma
+```
+
+When switching to a multi-file schema, update `prisma.config.ts` to point at the **folder** instead of a single file:
+
+```typescript
+// before: schema: "prisma/schema.prisma"
+schema: "prisma/schema", // points to the folder of .prisma files
+```
+
+**`prisma/schema/schema.prisma`:**
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+```
+
+> Note the relative output path changes to `../../generated/prisma` since the file is now one level deeper.
+
+**`prisma/schema/enums.prisma`:**
+
+```prisma
+enum ActiveStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum Role {
+  USER
+  AUTHOR
+  ADMIN
+}
+```
+
+**`prisma/schema/user.prisma`:**
+
+```prisma
+model User {
+  id           String       @id @default(uuid())
+  name         String       @db.VarChar(255)
+  email        String       @unique
+  password     String
+  activeStatus ActiveStatus @default(ACTIVE)
+  role         Role         @default(USER)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  profile      Profile?
+
+  @@map("users")
+}
+```
+
+**`prisma/schema/profile.prisma`:**
+
+```prisma
+model Profile {
+  id           String   @id @default(uuid())
+  profilePhoto String?
+  bio          String?
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("profiles")
+}
+```
+
+---
+
+## 14. Run Migrations and Generate the Client
+
+```bash
+npx prisma migrate dev
+```
+Creates migration files and applies them to the database.
+
+```bash
+npx prisma studio
+```
+Opens a visual database browser in the browser to view/edit data.
+
+```bash
+npx prisma generate
+```
+Generates the Prisma Client based on the schema, creating `generated/prisma/`. **This is what fixes the import error in `src/lib/prisma.ts`** — once generated, `PrismaClient` becomes a real, importable module.
+
+After this, uncomment the `$connect` / `$disconnect` lines in `server.ts` ([Section 11](#11-connect-prisma-client-to-the-app)). You should now see a successful database connection message and the server running on its configured port.
+
+---
+
+## 15. Modular Folder Structure (Route / Controller / Service)
+
+> 📝 **Working approach:** write the first feature (e.g. user registration) directly in `server.ts` to get it working end-to-end quickly, then refactor it into the modular structure below once it works. This keeps early debugging simple before introducing structure.
+
+```
+src/modules/user/
+├── user.controller.ts   // handles req/res, calls service functions
+├── user.interface.ts    // TypeScript types/interfaces for the module
+├── user.route.ts        // Express router, defines endpoints
+└── user.service.ts      // business logic, talks to Prisma/DB
+```
+
+---
+
+## 16. Final Project Structure
+
+```
+PROJECT-PRISMA-EXPRESS-BACKEND/
 ├── prisma/
 │   ├── migrations/
 │   │   ├── 20220620090709_init/
@@ -43,532 +614,24 @@ PROJECT-PRISMA-PRESS-BACKEND/
 └── tsconfig.json
 ```
 
-Every other API resource (e.g. `post`, `comment`, `auth`) will get its own folder inside `src/modules/`, following the same pattern as the `user` module.
-
 ---
 
-## Setting up the Project with Typescript, Express, Prisma And DB Connection
+## 17. Overall Setup Flow Diagram
 
-### Step 1: Initialize Git
-
-```bash
-git init
+```mermaid
+flowchart TD
+    A["npm init + git init + .gitignore"] --> B["Install TypeScript + tsx<br/>npx tsc --init"]
+    B --> C["Install Prisma core packages<br/>prisma, @prisma/client, adapter-pg, dotenv"]
+    C --> D["Configure ESM<br/>package.json type=module + tsconfig.json"]
+    D --> E["npx prisma init --output ../generated/prisma"]
+    E --> F["Create Prisma Postgres DB<br/>set DATABASE_URL in .env"]
+    F --> G["Install remaining app deps<br/>express, cors, jwt, bcrypt, pg, etc."]
+    G --> H["Create app.ts + server.ts<br/>+ config/index.ts"]
+    H --> I["Define Prisma schema models<br/>single-file or multi-file"]
+    I --> J["npx prisma migrate dev"]
+    J --> K["npx prisma generate"]
+    K --> L["Connect PrismaClient<br/>in src/lib/prisma.ts"]
+    L --> M["Uncomment prisma.$connect()<br/>in server.ts"]
+    M --> N["Build out modules:<br/>route / controller / service"]
+    N --> O["npm run dev → server live 🚀"]
 ```
-
-Create a `.gitignore` file in the project root and add:
-
-```
-node_modules
-dist
-build
-```
-
-This prevents dependencies and build output from being committed to GitHub.
-
----
-
-## Step 2: Initialize the Node.js + TypeScript Project
-
-Following the **Prisma Docs → Quickstart → Prisma Postgres** guide:
-
-```bash
-npm init
-npm install typescript tsx @types/node --save-dev
-npx tsc --init
-```
-
-`npm init` will ask a series of questions. Example answers used for this project:
-
-| Prompt | Value |
-|---|---|
-| package name | `prisma-press-backend` |
-| version | `0.0.1` |
-| description | `server.ts` |
-| entry point | `index.js` (default, not actually used since we run via `src/server.ts`) |
-| type | `module` (so we can use ESM `import/export` syntax) |
-| license | `ISC` |
-
-This generates a `package.json` like:
-
-```json
-{
-  "name": "prisma-press-backend",
-  "version": "0.0.1",
-  "description": "server.ts",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "",
-  "license": "ISC",
-  "type": "module"
-}
-```
-
----
-
-## Step 3: Configure `tsconfig.json`
-
-```json
-{
-  "compilerOptions": {
-    "outDir": "./dist",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "target": "ES2023",
-    "types": ["node"],
-    "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
-    "noUncheckedIndexedAccess": true,
-    "strict": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "moduleDetection": "force",
-    "skipLibCheck": true
-  },
-  // "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
-}
-```
-
-### What each option means:
-
-- **`outDir: "./dist"`** — where compiled JavaScript files go when you run `tsc` (build output folder).
-- **`module: "ESNext"`** — use the latest ES module syntax (`import`/`export`) when compiling.
-- **`moduleResolution: "bundler"`** — tells TypeScript to resolve imports the way modern bundlers do (works well with ESM + `tsx`).
-- **`target: "ES2023"`** — compile down to ES2023 JavaScript features (modern Node.js supports this natively).
-- **`types: ["node"]`** — include Node.js global types (e.g. `process`, `__dirname`).
-- **`sourceMap: true`** — generates `.map` files so you can debug TypeScript directly even after compilation.
-- **`declaration: true`** — generates `.d.ts` type declaration files for your compiled code.
-- **`declarationMap: true`** — generates source maps for the declaration files too.
-- **`noUncheckedIndexedAccess: true`** — when accessing an object/array by index (e.g. `arr[0]`), TypeScript treats the result as possibly `undefined` — forces you to handle missing values safely.
-- **`strict: true`** — turns on all strict type-checking rules (recommended for catching bugs early).
-- **`isolatedModules: true`** — ensures every file can be compiled independently (required by tools like `tsx`/`esbuild`).
-- **`noUncheckedSideEffectImports: true`** — flags side-effect-only imports (e.g. `import "./file"`) if the file doesn't actually exist, catching typos.
-- **`moduleDetection: "force"`** — forces every file to be treated as a module, even if it has no imports/exports.
-- **`skipLibCheck: true`** — skips type-checking of `.d.ts` files inside `node_modules` (speeds up compilation).
-- **`include`** — left commented out for now. We comment this out temporarily because `prisma.config.ts` (created in the next step) lives outside `src/`, and TypeScript would otherwise complain that it's not included in the project. Once everything is wired up, you can re-enable `"include": ["src/**/*"]` if needed, or simply leave it out so all `.ts` files in the project are picked up.
-- **`exclude`** — folders TypeScript should ignore (`node_modules`, `dist`).
-
----
-
-## Step 4: Initialize Prisma
-
-```bash
-npx prisma
-npx prisma init --output ../generated/prisma
-```
-
-This creates a `prisma.config.ts` file like:
-
-```ts
-// This file was generated by Prisma, and assumes you have installed the following:
-// npm install --save-dev prisma dotenv
-import "dotenv/config";
-import { defineConfig } from "prisma/config";
-
-export default defineConfig({
-  schema: "prisma/schema.prisma",
-  migrations: {
-    path: "prisma/migrations",
-  },
-  datasource: {
-    url: process.env["DATABASE_URL"],
-  },
-});
-```
-
-> **Note:** The first time you see this file, TypeScript may show a red underline under `process.env["DATABASE_URL"]` because `prisma.config.ts` sits **outside** the `src/` folder, and your `tsconfig.json` `include` is scoped to `src/**/*`. That's why we commented out the `include` line in Step 3 — so TypeScript checks the whole project, including this config file.
-
----
-
-## Step 5: Create a Prisma Postgres Database
-
-1. Go to the **Prisma** dashboard and create a new project.
-2. Skip the "deploy" step for now.
-3. On the dashboard, click **Open Connect Setup**.
-4. Copy the **connection string** shown there.
-5. Paste it into a `.env` file in your project root:
-
-```
-DATABASE_URL="YOUR_CONNECTION_STRING_HERE"
-```
-
----
-
-## Step 6: Install Dependencies
-
-### Dev Dependencies
-
-```bash
-npm install -D @types/cookie-parser @types/cors @types/express @types/jsonwebtoken @types/node @types/pg prisma tsx typescript
-```
-
-| Package | Purpose |
-|---|---|
-| `@types/cookie-parser` | Type definitions for `cookie-parser` |
-| `@types/cors` | Type definitions for the `cors` middleware |
-| `@types/express` | Type definitions for the Express.js framework |
-| `@types/jsonwebtoken` | Type definitions for `jsonwebtoken` |
-| `@types/node` | Type definitions for Node.js built-in modules |
-| `@types/pg` | Type definitions for the PostgreSQL (`pg`) driver |
-| `prisma` | Prisma CLI and schema management tool |
-| `tsx` | Run TypeScript files directly without pre-compiling |
-| `typescript` | TypeScript compiler (`tsc`) for type-checking and builds |
-
-### Dependencies
-
-```bash
-npm install @prisma/adapter-pg @prisma/client bcryptjs cookie-parser cors dotenv express http-status jsonwebtoken pg
-```
-
-| Package | Purpose |
-|---|---|
-| `@prisma/adapter-pg` | Prisma driver adapter for PostgreSQL |
-| `@prisma/client` | Prisma Client for running database queries |
-| `bcryptjs` | Hash and compare passwords securely |
-| `cookie-parser` | Parse cookies from incoming requests |
-| `cors` | Enable Cross-Origin Resource Sharing |
-| `dotenv` | Load environment variables from `.env` |
-| `express` | Web framework for building the API/server |
-| `http-status` | Named HTTP status codes (e.g. `httpStatus.OK`) |
-| `jsonwebtoken` | Create and verify JWT auth tokens |
-| `pg` | PostgreSQL driver for Node.js |
-
----
-
-## Step 7: Set Up Express
-
-Following the [Express docs](https://expressjs.com/), but written using **ES Modules** (`import`/`export`) instead of CommonJS, since `package.json` has `"type": "module"`.
-
-### `src/server.ts`
-
-```ts
-import "dotenv/config";
-import app from "./app";
-import config from "./config";
-import { prisma } from "./lib/prisma";
-
-const PORT = config.port;
-
-async function main() {
-    try {
-        await prisma.$connect();
-        console.log("Connected to the database successfully.");
-        app.listen(PORT, () => {
-            console.log(`Server is running on port ${PORT}`);
-        });
-    } catch (error) {
-        console.error("Error starting the server:", error);
-        await prisma.$disconnect();
-        process.exit(1);
-    }
-}
-
-main();
-```
-
-This async `main()` function connects to the database first — if that fails, the server never starts, and we exit cleanly instead of running with a broken DB connection.
-
-### `src/app.ts`
-
-```ts
-import cookieParser from "cookie-parser";
-import cors from "cors";
-import express, { Application, Request, Response } from "express";
-import config from "./config";
-import { userRoutes } from "./modules/user/user.route";
-
-const app: Application = express();
-
-app.use(cors({
-    origin: config.app_url,
-    credentials: true,
-}));
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-
-app.get("/", (req: Request, res: Response) => {
-    res.send("Hello, World!");
-});
-
-app.use("/api/users", userRoutes);
-
-export default app;
-```
-
----
-
-## Step 8: Add NPM Scripts
-
-In `package.json`:
-
-```json
-"scripts": {
-  "dev": "tsx watch src/server.ts",
-  "build": "tsc",
-  "start": "node dist/server.js"
-}
-```
-
-- **`dev`** — runs the server with `tsx watch`, which auto-restarts on file changes (great for development).
-- **`build`** — compiles TypeScript to JavaScript into `dist/` using `tsc`.
-- **`start`** — runs the compiled JavaScript (used in production).
-
-Run the dev server:
-
-```bash
-npm run dev
-```
-
----
-
-## Step 9: Connect Prisma Client to the App
-
-Create `src/lib/prisma.ts`:
-
-```ts
-import { PrismaPg } from "@prisma/adapter-pg";
-import "dotenv/config";
-import { PrismaClient } from "../../generated/prisma/client";
-
-const connectionString = `${process.env.DATABASE_URL}`;
-
-const adapter = new PrismaPg({ connectionString });
-const prisma = new PrismaClient({ adapter });
-
-export { prisma };
-```
-
-> **Note:** At this point you'll get an error on `import { PrismaClient } from "../../generated/prisma/client";` — because the Prisma Client hasn't been generated yet. That's expected. We need to:
-> 1. Write the Prisma schema/models (Step 11).
-> 2. Run the migration (Step 12).
-> 3. Run `npx prisma generate` to actually create the client at `generated/prisma`.
-
----
-
-## Step 10: Create the Config File
-
-Centralize all environment variables in one place for cleaner imports across the app.
-
-Create `src/config/index.ts`:
-
-```ts
-import dotenv from "dotenv";
-import path from "path";
-
-dotenv.config({ path: path.join(process.cwd(), ".env") });
-
-export default {
-    port: process.env.PORT,
-    database_url: process.env.DATABASE_URL,
-    app_url: process.env.APP_URL,
-    bcrypt_salt_rounds: process.env.BCRYPT_SALT_ROUNDS,
-    jwt_access_secret: process.env.JWT_ACCESS_SECRET,
-    jwt_refresh_secret: process.env.JWT_REFRESH_SECRET,
-    jwt_access_expires_in: process.env.JWT_ACCESS_EXPIRES_IN,
-    jwt_refresh_expires_in: process.env.JWT_REFRESH_EXPIRES_IN,
-}
-```
-
-### Explanation: `dotenv.config({ path: path.join(process.cwd(), ".env") })`
-
-- `process.cwd()` returns the **current working directory** — i.e. the folder you ran `npm run dev` from (normally your project root).
-- `path.join(process.cwd(), ".env")` builds an absolute path to the `.env` file, regardless of which file is importing this config or how deep it is in the folder structure.
-- `dotenv.config({ path: ... })` loads the variables from that `.env` file into `process.env`.
-
-This is more reliable than just calling `dotenv.config()` with no path, because that default behavior depends on the current working directory matching where `.env` actually lives — using `process.cwd()` explicitly avoids "it works on my machine but not when run from another folder" bugs.
-
----
-
-## Step 11: Middleware Setup in `app.ts`
-
-```ts
-app.use(cors({
-    origin: config.app_url,
-    credentials: true,
-}));
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-```
-
-### What each middleware does:
-
-- **`cors({ origin, credentials })`** — Cross-Origin Resource Sharing. By default, browsers block requests from a different origin (e.g. frontend on `localhost:3000` calling backend on `localhost:5000`). This middleware allows requests **only from the specified `origin`** (your frontend's URL), and `credentials: true` allows cookies/auth headers to be sent along with cross-origin requests.
-- **`express.json()`** — parses incoming requests with a `Content-Type: application/json` body, so you can access `req.body` as a JS object.
-- **`express.urlencoded({ extended: true })`** — parses incoming requests with URL-encoded payloads (e.g. traditional HTML form submissions). `extended: true` allows parsing of nested objects/arrays in the form data.
-- **`cookieParser()`** — parses the `Cookie` header on incoming requests and populates `req.cookies`, so you can read cookies (e.g. for refresh tokens) easily.
-
----
-
-## Step 12: Multi-File Prisma Schema
-
-By default Prisma uses a single `schema.prisma` file. If you prefer splitting models across multiple files, Prisma supports a **multi-file schema** setup:
-
-```
-prisma/
-├── migrations/
-├── schema/
-│   ├── enums.prisma
-│   ├── profile.prisma
-│   ├── schema.prisma
-│   └── user.prisma
-```
-
-To enable this:
-
-1. Create a `prisma/schema/` folder.
-2. Move `schema.prisma` (with the `generator` and `datasource` blocks) into that folder.
-3. Split your models into separate `.prisma` files inside the same folder (e.g. `user.prisma`, `profile.prisma`, `enums.prisma`). Prisma automatically merges all `.prisma` files inside the `schema/` folder when generating/migrating.
-4. Update `prisma.config.ts` so the `schema` path points to the folder instead of the single file:
-
-```ts
-export default defineConfig({
-  schema: "prisma/schema",
-  // ...
-});
-```
-
-This keeps large schemas organized as your number of models grows.
-
----
-
-## Step 13: Write the Prisma Models
-
-### `prisma/schema/schema.prisma`
-
-```prisma
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
-generator client {
-  provider = "prisma-client"
-  output   = "../../generated/prisma"
-}
-
-datasource db {
-  provider = "postgresql"
-}
-```
-
-### `prisma/schema/enums.prisma`
-
-```prisma
-enum ActiveStatus {
-  ACTIVE
-  BLOCKED
-}
-
-enum Role {
-  USER
-  AUTHOR
-  ADMIN
-}
-```
-
-### `prisma/schema/user.prisma`
-
-```prisma
-model User {
-  id           String       @id @default(uuid())
-  name         String       @db.VarChar(255)
-  email        String       @unique
-  password     String
-  activeStatus ActiveStatus @default(ACTIVE)
-  role         Role         @default(USER)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  profile      Profile?
-
-  @@map("users")
-}
-```
-
-### `prisma/schema/profile.prisma`
-
-```prisma
-model Profile {
-  id           String   @id @default(uuid())
-  profilePhoto String?
-  bio          String?
-
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@map("profiles")
-}
-```
-
----
-
-## Step 14: Run Migrations & Generate the Client
-
-```bash
-npx prisma migrate dev
-```
-
-This creates the migration files and applies them to your database.
-
-```bash
-npx prisma studio
-```
-
-Opens a visual database browser in your browser to view/edit data.
-
-```bash
-npx prisma generate
-```
-
-Generates the Prisma Client based on your schema, creating the `generated/prisma` folder. This is what fixes the earlier import error in `src/lib/prisma.ts` — once generated, `PrismaClient` becomes a real, importable module.
-
----
-
-## Step 15: Create Your First API Module (User)
-
-Wire up the route in `app.ts`:
-
-```ts
-app.use("/api/users", userRoutes);
-```
-
-Create the module folder structure:
-
-```
-src/modules/user/
-├── user.controller.ts   // handles req/res, calls service functions
-├── user.interface.ts     // TypeScript types/interfaces for the module
-├── user.route.ts         // Express router, defines endpoints
-└── user.service.ts       // business logic, talks to Prisma/DB
-```
-
-Repeat this same folder pattern (`<name>.controller.ts`, `<name>.interface.ts`, `<name>.route.ts`, `<name>.service.ts`) for every new resource (e.g. `post`, `comment`, `auth`) inside `src/modules/<name>/`.
-
----
-
-## ✅ Quick Recap Checklist
-
-- [ ] `git init` + `.gitignore`
-- [ ] `npm init` + install TypeScript + `tsc --init`
-- [ ] Configure `tsconfig.json`
-- [ ] `npx prisma init --output ../generated/prisma`
-- [ ] Create Prisma Postgres DB → copy connection string into `.env`
-- [ ] Install dev + prod dependencies
-- [ ] Set up `server.ts` and `app.ts`
-- [ ] Add `dev` / `build` / `start` scripts
-- [ ] Create `src/lib/prisma.ts`
-- [ ] Create `src/config/index.ts`
-- [ ] Set up middleware (`cors`, `express.json`, `urlencoded`, `cookieParser`)
-- [ ] (Optional) Switch to multi-file Prisma schema
-- [ ] Write models (`User`, `Profile`, enums)
-- [ ] `npx prisma migrate dev` → `npx prisma studio` → `npx prisma generate`
-- [ ] Build first module (`user`) with controller/service/route/interface
