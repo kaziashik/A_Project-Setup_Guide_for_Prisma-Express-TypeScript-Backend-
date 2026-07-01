@@ -1,0 +1,125 @@
+# Title: Requirement Analysis, Authentication System Design & Implementation
+
+---
+
+## 1. Roadmap of a project from beginning to completion
+
+1. Read the project requirement or requirement analysis thoroughly.
+2. Brainstorming.
+3. Note down important topics — features, roles, API endpoints.
+4. Note down the flow of the project: user flow (role-based), and how other features flow and connect with the user.
+5. ERD design or database design.
+6. Project setup with the required tech stack — e.g. Node, Express, Prisma, TypeScript, Dotenv.
+7. Prisma schema models defining.
+8. Prisma migrate & generate.
+9. Project business logic implementation in API (for backend) or frontend components (for frontend).
+10. Check new features & well-test the completed features.
+
+---
+
+## 2. Getting started with requirement analysis of the project
+
+Based on the ERD, this looks like a **blog / content platform** with role-based authentication. Breaking it down the way step 3–4 of the roadmap suggests:
+
+**Core entities identified**
+- `users` — the account itself (credentials, role, status).
+- `profile` — extra personal info about a user, kept separate from the core account table.
+- `posts` — the content users publish.
+- `comments` — replies attached to a post.
+
+**Features implied by the schema**
+- **Authentication** — `users.email` + `users.password` → register/login.
+- **Role-based access** — `users.role` (enum) suggests at least two roles, e.g. `USER` / `ADMIN`, controlling who can manage posts, moderate comments, etc.
+- **Account status control** — `users.activeStatus` (enum) suggests an `ACTIVE` / `BLOCKED` type state, used to disable an account without deleting it (this is exactly what the refresh-token flow checks before issuing a new access token).
+- **Profile management** — a user can set a `profilephoto` and `bio`, separate from login credentials. Optional fields (`text?`) mean a profile can exist with these left empty.
+- **Blogging / content publishing** — `posts` has `title`, `content`, `thumbnail`, `tags[]`, `isFeatured`, `status` (draft/published/etc.), and `views` for a basic analytics counter.
+- **Commenting with moderation** — `comments` has its own `status` enum, implying comments may need approval before showing publicly (e.g. `PENDING` / `APPROVED` / `REJECTED`).
+- **Ownership tracking** — both `posts.authorId` and `comments.authorId` point back to `users.id`, so every post and comment has a clear owner.
+
+**User flow (role-based), high level**
+1. A visitor registers → row created in `users` (default role, default active status).
+2. User optionally fills out their `profile` (photo, bio).
+3. User creates `posts` (owns them via `authorId`).
+4. Other users read posts and leave `comments` (owns them via `authorId`, linked to the post via `postId`).
+5. An admin role can likely moderate: change `posts.status`, `comments.status`, or set a user's `activeStatus` to `BLOCKED`.
+
+**API endpoints this naturally leads to** (rough draft, refine during actual design)
+- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/refresh-token`
+- `GET/PATCH /api/profile`
+- `GET/POST/PATCH/DELETE /api/posts`
+- `GET/POST/PATCH/DELETE /api/comments`
+
+---
+
+## 3. Drawing the ERD for the project
+
+```mermaid
+erDiagram
+  USERS ||--o| PROFILE : has
+  USERS ||--o{ POSTS : writes
+  USERS ||--o{ COMMENTS : writes
+  POSTS ||--o{ COMMENTS : has
+
+  USERS {
+    uuid id PK
+    string name
+    string email UK
+    string password
+    enum activeStatus
+    enum role
+    timestamp createdAt
+    timestamp updatedAt
+  }
+  PROFILE {
+    uuid id PK
+    uuid userId FK
+    string profilephoto
+    string bio
+    timestamp createdAt
+    timestamp updatedAt
+  }
+  POSTS {
+    uuid id PK
+    string title
+    string content
+    string thumbnail
+    boolean isFeatured
+    enum status
+    string tags
+    bigint views
+    uuid authorId FK
+    timestamp createdAt
+    timestamp updatedAt
+  }
+  COMMENTS {
+    bigint id PK
+    string content
+    uuid authorId FK
+    uuid postId FK
+    enum status
+    timestamp createdAt
+    timestamp updatedAt
+  }
+```
+
+GitHub renders this `mermaid` code block natively in any `.md` file — no extra setup needed, just paste it as-is.
+
+**Relationship notes**
+- `users` ↔ `profile` — **one-to-one**. Each user has at most one profile row (`profile.userId` is a unique FK back to `users.id`).
+- `users` ↔ `posts` — **one-to-many**. One user can author many posts (`posts.authorId`).
+- `users` ↔ `comments` — **one-to-many**. One user can author many comments (`comments.authorId`).
+- `posts` ↔ `comments` — **one-to-many**. One post can have many comments (`comments.postId`).
+
+**Why split `profile` out of `users` instead of adding those columns directly to `users`?**
+- Keeps the auth-critical table (`users`) lean — password, role, status — separate from optional, frequently-changing personal info (bio, photo).
+- Lets you fetch just credentials for auth checks without pulling profile data every time.
+- Makes it easy to add more profile fields later without touching the auth table or its indexes.
+
+---
+
+## Quick takeaways for future projects
+
+- Always separate the **auth-critical table** (`users`) from **optional profile data** — don't cram everything into one table.
+- Use an `activeStatus` enum on `users` from day one — it's the cheapest way to support banning/disabling accounts later, and it plugs directly into the refresh-token check.
+- Give content tables (`posts`, `comments`) their own `status` enum if moderation or draft/publish states are even remotely likely — much easier to add now than to retrofit.
+- Draw the ERD *before* writing any Prisma schema — it forces you to settle on relationships (1-1 vs 1-many) up front instead of discovering the mismatch mid-migration.
