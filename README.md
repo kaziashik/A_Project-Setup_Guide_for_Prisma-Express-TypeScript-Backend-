@@ -1,3 +1,6 @@
+# Project Directory Structure
+
+```text
 PROJECT-PRISMA-PRESS/
 ├── .firebase/                  # (Hidden slightly at the bottom / standard config)
 ├── dist/                       # Compiled JavaScript output
@@ -12,20 +15,20 @@ PROJECT-PRISMA-PRESS/
     │   ├── auth/               # Authentication handlers
     │   ├── comments/           # Comment handlers
     │   ├── post/               # Post handlers
-    │   ├── premimum/           # Premium feature handlers
-    │   │   ├── premimu.router.ts
-    │   │   ├── premimu.service.ts
-    │   │   └── premimum.controller.ts
+    │   ├── premium/            # Premium feature handlers
+    │   │   ├── premium.router.ts
+    │   │   ├── premium.service.ts
+    │   │   └── premium.controller.ts
     │   ├── subscription/       # Subscription handlers
     │   │   ├── subscription.controller.ts
     │   │   ├── subscription.route.ts
     │   │   ├── subscription.service.ts
-    │   │   └── subscription.utilits.ts
+    │   │   └── subscription.utils.ts
     │   └── users/              # User account profiles handling
     ├── utils/                  # Shared helper utility files
     ├── app.ts                  # App instantiation & middleware loader
     └── server.ts               # Core server entry point listener
-├── .env                        # Local environment private variables
+├── .env                        # Local environment private variables (git-ignored)
 ├── .env.example                # Shared safe environment structure template
 ├── .gitignore                  # Instructs git on files to completely ignore
 ├── package-lock.json           # Secure version lock state tree
