@@ -1,0 +1,492 @@
+# Login System with Passport.js (Local + Google)
+
+## Why we need Passport?
+
+If a user logs in with email/password AND also logs in with Google, without
+proper handling it can create **2 separate accounts for 1 person**.
+
+Also, in real projects, client requirements grow:
+- First: "we need Google login"
+- Later: "we need Facebook login"
+- Later: "we need GitHub login"
+
+So instead of writing separate logic for every provider, we use **Passport.js**
+— a middleware-based authentication library that supports many "strategies"
+(local, google, facebook, github, etc.) with one common pattern.
+
+To support multiple providers for the same user, we don't put `googleId`,
+`facebookId` etc. directly on the `User` table. Instead we make a separate
+`Auth` table (one user → many auth methods).
+
+---
+
+## Flowchart
+
+```mermaid
+flowchart TD
+    A[Login] --> B[Email/Password]
+    A --> C[Google Login]
+    B --> D[Passport.js]
+    C --> D[Passport.js]
+
+    D --> E[LocalStrategy]
+    D --> F[GoogleStrategy]
+
+    E --> E1[Find User by email]
+    E1 --> E2[Match the Password]
+    E2 --> E3[done]
+
+    F --> F1[Find the email from Google]
+    F1 --> F2{Is User Exists?}
+    F2 -- Yes --> G1[Google Auth Connect]
+    F2 -- No --> G2[Create New User]
+    G2 --> G3[Google Auth create]
+    G1 --> H[done]
+    G3 --> H[done]
+```
+
+---
+
+## 1. Prisma Model
+
+One `User` can have many `Auth` records (one-to-many).
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum AuthProvider {
+  CREDENTIALS
+  GOOGLE
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String?
+  role      Role     @default(USER)
+
+  auths     Auth[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Auth {
+  id         String       @id @default(uuid())
+  provider   AuthProvider
+  providerId String
+
+  userId     String
+  user       User         @relation(fields: [userId], references: [id])
+
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@unique([provider, providerId]) // e.g. CREDENTIALS+email, GOOGLE+googleId
+  @@unique([userId, provider])     // 1 user can only link 1 Google, 1 Credentials, etc.
+  @@map("auths")
+}
+```
+
+**Simple meaning:** `Auth` table stores *which provider* + *provider's id*
+for each user. Same person can have both a `CREDENTIALS` row and a `GOOGLE`
+row, but they all point to the same `userId`.
+
+---
+
+## 2. Install Packages
+
+```bash
+npm i passport passport-local passport-google-oauth20 bcryptjs
+npm i -D @types/passport @types/passport-local @types/passport-google-oauth20
+```
+
+---
+
+## 3. Register Passport in app.ts
+
+```ts
+import passport from "passport";
+import "./config/passport"; // load strategies
+
+app.use(passport.initialize());
+```
+
+---
+
+## 4. config/passport.ts (Local + Google Strategy)
+
+```ts
+import passport from "passport";
+import { Strategy as LocalStrategy } from "passport-local";
+import {
+  Strategy as GoogleStrategy,
+  Profile,
+  VerifyCallback,
+} from "passport-google-oauth20";
+import { prisma } from "../lib/prisma";
+import bcryptjs from "bcryptjs";
+import config from ".";
+import { AuthProvider, Role } from "../../generated/prisma/enums";
+
+// ---------- Local (email + password) ----------
+passport.use(
+  new LocalStrategy(
+    {
+      usernameField: "email",
+      passwordField: "password",
+    },
+    async (email, password, done) => {
+      try {
+        const user = await prisma.user.findUnique({ where: { email } });
+
+        if (!user) {
+          return done(null, false, { message: "User does not exist!" });
+        }
+
+        if (!user.password) {
+          return done(null, false, {
+            message: "This account has no password. Please login with Google.",
+          });
+        }
+
+        const isPasswordMatch = await bcryptjs.compare(password, user.password);
+
+        if (!isPasswordMatch) {
+          return done(null, false, { message: "Password does not match" });
+        }
+
+        return done(null, user);
+      } catch (error) {
+        return done(error as Error);
+      }
+    }
+  )
+);
+
+// ---------- Google OAuth ----------
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: config.GOOGLE_CLIENT_ID,
+      clientSecret: config.GOOGLE_CLIENT_SECRET,
+      callbackURL: config.GOOGLE_CLIENT_CALLBACK_URL,
+    },
+    async (
+      accessToken: string,
+      refreshToken: string,
+      profile: Profile,
+      done: VerifyCallback
+    ) => {
+      const email = profile.emails?.[0].value;
+
+      if (!email) {
+        return done(null, false, { message: "No email found from Google!" });
+      }
+
+      // Check if user already exists
+      let user = await prisma.user.findUnique({
+        where: { email },
+        include: { auths: true },
+      });
+
+      if (user) {
+        // User exists -> just link Google auth if not linked yet
+        const googleAuth = user.auths.find(
+          (auth) => auth.provider === AuthProvider.GOOGLE
+        );
+
+        if (!googleAuth) {
+          await prisma.auth.create({
+            data: {
+              provider: AuthProvider.GOOGLE,
+              providerId: profile.id,
+              userId: user.id,
+            },
+          });
+        }
+        return done(null, user);
+      }
+
+      // New user -> create user + google auth together
+      user = await prisma.user.create({
+        data: {
+          name: profile.displayName,
+          email,
+          role: Role.USER,
+          auths: {
+            create: {
+              provider: AuthProvider.GOOGLE,
+              providerId: profile.id,
+            },
+          },
+        },
+        include: { auths: true },
+      });
+
+      return done(null, user);
+    }
+  )
+);
+```
+
+**Simple meaning:**
+- Local strategy → find user by email → check password.
+- Google strategy → find user by email from Google profile → if found, link
+  Google auth (if not linked) → if not found, create new user + Google auth
+  together. This is exactly what the flowchart shows.
+
+---
+
+## 5. Routes — auth.router.ts
+
+```ts
+import { Router } from "express";
+import passport from "passport";
+import { AuthControllers } from "./auth.controller";
+
+const router = Router();
+
+router.post("/register", AuthControllers.register);
+router.post("/login", AuthControllers.credentialsLogin);
+
+router.get(
+  "/google",
+  passport.authenticate("google", { scope: ["profile", "email"] })
+);
+router.get("/google/callback", AuthControllers.googleCallback);
+
+router.post("/logout", AuthControllers.logout);
+
+export const authRoutes = router;
+```
+
+---
+
+## 6. Controller — auth.controller.ts
+
+```ts
+import httpStatus from "http-status-codes";
+import { NextFunction, Request, Response } from "express";
+import passport from "passport";
+import { AuthServices } from "./auth.service";
+import catchAsync from "../../utils/catchAsync";
+import sendResponse from "../../utils/sendResponse";
+import { createUserTokens } from "../../helpers/authToken";
+import { clearAuthCookie, setAuthCookie } from "../../helpers/authCookie";
+import config from "../../config";
+
+const register = catchAsync(async (req: Request, res: Response) => {
+  const user = await AuthServices.register(req.body);
+
+  res.status(httpStatus.CREATED).json({
+    success: true,
+    statusCode: httpStatus.CREATED,
+    message: "User registered successfully",
+    data: user,
+  });
+});
+
+const credentialsLogin = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    passport.authenticate("local", async (err: any, user: any, info: any) => {
+      try {
+        if (err) return next(err);
+        if (!user) return next(new Error(info?.message || "Invalid credentials!"));
+
+        const userTokens = createUserTokens(user);
+        setAuthCookie(res, userTokens);
+
+        const { password, ...rest } = user;
+
+        sendResponse(res, {
+          success: true,
+          statusCode: httpStatus.OK,
+          message: "User login successfully",
+          data: {
+            accessToken: userTokens.accessToken,
+            refreshToken: userTokens.refreshToken,
+            user: rest,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    })(req, res, next);
+  }
+);
+
+const googleCallback = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    passport.authenticate("google", async (err: any, user: any) => {
+      try {
+        if (err || !user) {
+          return next(new Error("Google authentication failed"));
+        }
+
+        const userTokens = createUserTokens(user);
+        setAuthCookie(res, userTokens);
+
+        res.redirect(`${config.FRONTEND_URL}/auth/success`);
+      } catch (error) {
+        next(error);
+      }
+    })(req, res, next);
+  }
+);
+
+const logout = catchAsync(async (req: Request, res: Response) => {
+  clearAuthCookie(res);
+  sendResponse(res, {
+    success: true,
+    statusCode: httpStatus.OK,
+    message: "User logout successfully",
+    data: null,
+  });
+});
+
+export const AuthControllers = {
+  register,
+  credentialsLogin,
+  googleCallback,
+  logout,
+};
+```
+
+---
+
+## 7. Service — auth.service.ts (register)
+
+```ts
+import bcryptjs from "bcryptjs";
+import { prisma } from "../../lib/prisma";
+import { AuthProvider } from "../../../generated/prisma/enums";
+
+const register = async (payload: {
+  name: string;
+  email: string;
+  password: string;
+}) => {
+  const isUserExists = await prisma.user.findUnique({
+    where: { email: payload.email },
+  });
+
+  if (isUserExists) {
+    throw new Error("User already exists");
+  }
+
+  const hashPassword = await bcryptjs.hash(payload.password, 10);
+
+  const user = await prisma.user.create({
+    data: {
+      ...payload,
+      password: hashPassword,
+      auths: {
+        create: {
+          provider: AuthProvider.CREDENTIALS,
+          providerId: payload.email,
+        },
+      },
+    },
+  });
+
+  const { password, ...userData } = user;
+  return userData;
+};
+
+export const AuthServices = { register };
+```
+
+---
+
+## 8. Cookie Helper — authCookie.ts
+
+```ts
+import { Response } from "express";
+import config from "../config";
+
+export interface AuthTokens {
+  accessToken?: string;
+  refreshToken?: string;
+}
+
+const cookieOptions = {
+  httpOnly: true,
+  secure: config.NODE_ENV === "production",
+  sameSite: config.NODE_ENV === "production" ? ("none" as const) : ("lax" as const),
+};
+
+export const setAuthCookie = (res: Response, tokenInfo: AuthTokens) => {
+  if (tokenInfo.accessToken) {
+    res.cookie("accessToken", tokenInfo.accessToken, {
+      ...cookieOptions,
+      maxAge: 15 * 60 * 1000, // 15 min
+    });
+  }
+
+  if (tokenInfo.refreshToken) {
+    res.cookie("refreshToken", tokenInfo.refreshToken, {
+      ...cookieOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+  }
+};
+
+export const clearAuthCookie = (res: Response) => {
+  res.clearCookie("accessToken", cookieOptions);
+  res.clearCookie("refreshToken", cookieOptions);
+};
+```
+
+---
+
+## 9. Google Cloud Console Setup
+
+1. Go to Google Cloud Console → create a project.
+2. Enable **OAuth consent screen**.
+3. Create **OAuth Client ID** (Web application).
+4. Set:
+   - **Authorized JavaScript origins** → frontend URL
+     `http://localhost:3000`
+   - **Authorized redirect URIs** → backend callback route
+     `http://localhost:5000/api/v1/auth/google/callback`
+5. Copy **Client ID** and **Client Secret** into `.env`.
+
+```env
+GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="your-client-secret"
+GOOGLE_CLIENT_CALLBACK_URL="http://localhost:5000/api/v1/auth/google/callback"
+DATABASE_URL="postgresql://user:pass@host/db?sslmode=require"
+```
+
+---
+
+## Quick Summary (short version)
+
+| Step | What happens |
+|---|---|
+| 1 | User picks Email/Password or Google login |
+| 2 | Passport routes request to correct strategy |
+| 3 | **Local**: find user by email → compare password → done |
+| 4 | **Google**: get email from Google profile → check if user exists |
+| 5 | If exists → link Google auth (if not linked) → done |
+| 6 | If not exists → create new user + Google auth → done |
+| 7 | Both paths end with `done(null, user)` → tokens + cookies are set |
+
+**Key idea:** One `User`, many `Auth` rows — never create duplicate users
+for the same email across different login providers.
