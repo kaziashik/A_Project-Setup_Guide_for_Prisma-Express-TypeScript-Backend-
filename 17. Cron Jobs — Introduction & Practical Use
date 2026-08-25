@@ -1,0 +1,167 @@
+# Cron Jobs — Introduction & Practical Use
+
+What a cron job actually is, why backend projects need them, and a real working example: automatically deleting unverified doctor applications after 1 hour.
+
+---
+
+## 1. What is a cron job?
+
+A cron job is a task that runs **automatically, on a schedule, without a person or a request triggering it.** No user clicks a button, no API call kicks it off — it just fires on its own, at whatever interval you define (every minute, every night at 2am, every Monday, etc.), for as long as your server process is running.
+
+The name comes from `cron`, a scheduling daemon built into Unix/Linux systems decades ago. `node-cron` is a JavaScript library that recreates that same scheduling behavior inside a Node.js process, so you don't need a separate system-level tool — the schedule lives in your own application code.
+
+---
+
+## 2. A real-life analogy
+
+Think of a cron job like a recurring alarm on your phone, except the alarm doesn't just ring — it actually *does something* when it goes off, with no one around to press snooze or confirm it.
+
+**A closer real-world example:** a gym automatically charges every member's card on the 1st of each month. No staff member manually processes each payment — a scheduled job runs on the 1st, finds everyone due for billing, and charges them. That's exactly the shape of a cron job: "on this schedule, go do this task, unattended."
+
+---
+
+## 3. Why a developer needs this at all
+
+Without cron, your application only does something in response to *someone asking it to* — a user hitting an endpoint, a webhook firing, etc. But plenty of real tasks need to happen **regardless of whether anyone is actively using the app right now**:
+
+- Cleaning up stale/expired data
+- Sending reminder emails
+- Generating daily/weekly reports
+- Syncing data with an external service on a fixed interval
+- Expiring things that were only ever meant to be temporary
+
+None of these have a natural "user click" to trigger them — they need to happen on their own, on a timer.
+
+---
+
+## 4. Where developers actually use cron jobs — key problems it solves
+
+| Use case | Problem it solves |
+|---|---|
+| **Deleting unverified accounts** (your example below) | Prevents your database from filling up with abandoned signups that never completed email verification |
+| **Expiring old sessions / tokens** | Cleans up stale auth tokens or password-reset tokens that were never used, without relying on the user to log out |
+| **Sending reminder emails** (e.g. "your subscription renews tomorrow") | Doesn't require a user action — the reminder has to go out *before* something happens, on a calendar, not on-demand |
+| **Generating scheduled reports** (daily sales summary, weekly analytics digest) | Produces the report once, on schedule, instead of recalculating it live every time someone requests it |
+| **Retrying failed background jobs** (e.g. a failed payment webhook) | Gives failed operations another chance without a person noticing and manually retrying |
+| **Database backups** | Needs to happen on a fixed schedule regardless of traffic or usage |
+| **Cache invalidation / refresh** | Keeps cached data from going stale indefinitely when nothing else would naturally refresh it |
+| **Deactivating trial accounts after N days** | Enforces a business rule (trial period ends) without needing the user to trigger anything |
+
+**The common thread:** cron jobs solve the problem of *"this needs to happen based on time passing, not based on a user action."* Anything phrased as "after X hours/days, do Y" is almost always a cron job candidate.
+
+---
+
+## 5. Install & basic setup
+
+```bash
+npm install node-cron
+```
+
+```typescript
+import cron from 'node-cron';
+
+cron.schedule('* * * * *', () => {
+  console.log('running a task every minute');
+});
+```
+
+This one call — `cron.schedule(pattern, callback)` — registers a recurring task. As long as your Node process keeps running, this callback fires on the schedule you define, forever, with zero further code needed.
+
+---
+
+## 6. Cron syntax, explained
+
+```
+ ┌────────────── second (optional)
+ │ ┌──────────── minute
+ │ │ ┌────────── hour
+ │ │ │ ┌──────── day of month
+ │ │ │ │ ┌────── month
+ │ │ │ │ │ ┌──── day of week
+ │ │ │ │ │ │
+ * * * * * *
+```
+
+Each position is either a specific number, a range, a step (`*/N`), or `*` (meaning "every possible value" for that slot).
+
+| Pattern | Meaning |
+|---|---|
+| `* * * * *` | Every minute |
+| `*/10 * * * *` | Every 10 minutes |
+| `0 * * * *` | Every hour, on the hour |
+| `0 0 * * *` | Every day at midnight |
+| `0 9 * * 1` | Every Monday at 9:00 AM |
+| `0 0 1 * *` | Midnight on the 1st of every month |
+
+**Why `*/10` specifically** in the example below: `*/N` means "every N units, starting from 0" — so `*/10` in the minute slot fires at `:00`, `:10`, `:20`, `:30`, `:40`, `:50` past every hour.
+
+---
+
+## 7. Real example: deleting unverified doctor applications after 1 hour
+
+**The business rule:** if a doctor applies to join the platform but never verifies their email within 1 hour, their application (and the `User`/`Doctor` rows it created) should be automatically removed — keeping the database free of abandoned, never-completed applications.
+
+```typescript
+// lib/cron.ts
+import cron from 'node-cron';
+import { DoctorVerificationStatus, Role } from '../../generated/prisma/enums';
+import { prisma } from './prisma';
+
+export const deleteUnverifiedDoctors = async () => {
+    cron.schedule('*/10 * * * *', async () => {
+       try {
+           const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+           const deletedDoctors = await prisma.user.deleteMany({
+               where: {
+                   role: Role.DOCTOR,
+                   emailVerified: false,
+                   createdAt: { lt: oneHourAgo },
+                   doctor: {
+                       verificationStatus: DoctorVerificationStatus.PENDING
+                   }
+               }
+           });
+           if (deletedDoctors.count > 0) {
+               console.log(`
+                Cron: Deleted ${deletedDoctors.count} unverified email doctor applications older than 1 hour
+                `);
+           }
+       } catch (error) {
+            console.log("Cron: Failed to delete unverified doctor applications", error);
+       }
+       console.log("Unverified Doctor Delete cron schedule (every 10 minutes)");
+    });
+}
+```
+
+**Walking through the logic:**
+- **`*/10 * * * *`** — runs every 10 minutes, not every hour. Checking more frequently than the 1-hour threshold means an unverified doctor gets cleaned up somewhere between 60–70 minutes after signup, not exactly at 60 — a reasonable trade-off, since checking every minute for something that only needs hourly precision would be wasteful.
+- **`oneHourAgo`** — computed fresh on every run (`Date.now() - 60 * 60 * 1000`), not hardcoded, so the cutoff always reflects "1 hour before *this specific run*," not a stale value from when the server first started.
+- **`deleteMany` with a compound `where`** — only deletes users that are simultaneously: role `DOCTOR`, `emailVerified: false`, older than the cutoff, *and* still `PENDING` on the doctor verification side. This last condition matters: if an admin somehow already reviewed and approved/rejected the application before the 1-hour mark, this job correctly leaves it alone — verification status, not just email-verification, gates the deletion.
+- **`try/catch` inside the scheduled callback** — critical, because if this callback throws unhandled, `node-cron` doesn't crash your whole server, but the error would otherwise just vanish silently into an unhandled rejection. Catching and logging it means you'll actually see cron failures in your logs.
+
+**Wiring it into `server.ts` — needs to run once, before the server starts accepting requests:**
+
+```typescript
+import { deleteUnverifiedDoctors } from './lib/cron';
+
+async function main() {
+  await deleteUnverifiedDoctors();
+
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+main();
+```
+
+---
+
+## 8. Worth knowing about this specific implementation
+
+Not rewritten here, just flagged:
+
+- **`await deleteUnverifiedDoctors()` doesn't actually need to be awaited.** `cron.schedule(...)` registers the task and returns immediately — it doesn't return a `Promise` that resolves once the schedule "starts working." The `await` here is harmless (since the function itself is `async` but does no other awaited work before calling `cron.schedule`), but it's not doing anything functionally different from calling it without `await`.
+- **Make sure this only gets called once.** If `deleteUnverifiedDoctors()` is accidentally called more than once (e.g. during a dev-mode hot-reload with `tsx watch`, if the import triggers re-execution), you'd end up with two overlapping cron schedules both trying to delete the same rows every 10 minutes — harmless functionally (deleting an already-deleted row just matches 0 rows), but wasteful and confusing in logs. Calling it exactly once from `server.ts`'s `main()`, as shown above, avoids this.
+- **Function name vs. what it actually does.** `deleteUnverifiedDoctors` doesn't delete anything itself — it *schedules* a recurring task that deletes doctors. A name like `scheduleUnverifiedDoctorCleanup` would be slightly more accurate, though not a functional issue.
